@@ -92,27 +92,27 @@ class ReLUOpenFHE:
         if self.approximation_method == "polynomial":
             # Pre-computed coefficients from least squares fitting
             # Fitted to approximate max(0, x) for x in [-5, 5]
+            # Computed using scipy.optimize.curve_fit
 
             if self.degree == 3:
                 # Degree 3: fast, less accurate
-                # ReLU(x) ≈ 0.5*x + 0.195*x^3
-                # Good for |x| < 2
-                return np.array([1.25, 0.5, 0.0, 0.195])
+                # Max error: ~0.47, Mean error: ~0.15
+                return np.array([0.469219, 0.500000, 0.093656, 0.000000])
 
             elif self.degree == 5:
                 # Degree 5: balanced
-                # Better approximation for |x| < 3
-                return np.array([1.56, 0.5, 0.0, 0.227, 0.0, -0.037])
+                # Max error: ~0.29, Mean error: ~0.07
+                return np.array([0.293262, 0.500000, 0.163899, -0.000000, -0.003271, 0.000000])
 
             elif self.degree == 7:
                 # Degree 7: accurate (default)
-                # Good approximation for |x| < 5
-                return np.array([1.71, 0.5, 0.0, 0.241, 0.0, -0.055, 0.0, 0.0063])
+                # Max error: ~0.21, Mean error: ~0.04
+                return np.array([0.213837, 0.500000, 0.230484, -0.000000, -0.011246, 0.000000, 0.000233, 0.000000])
 
             elif self.degree == 9:
                 # Degree 9: very accurate but slower
-                # Excellent for |x| < 5
-                return np.array([1.78, 0.5, 0.0, 0.247, 0.0, -0.063, 0.0, 0.0098, 0.0, -0.00095])
+                # Max error: ~0.17, Mean error: ~0.03
+                return np.array([0.168397, 0.500000, 0.295788, -0.000000, -0.025584, 0.000000, 0.001226, -0.000000, -0.000021, 0.000000])
 
             else:
                 raise ValueError(f"Unsupported degree: {self.degree}. Use 3, 5, 7, or 9.")
