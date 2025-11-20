@@ -21,13 +21,13 @@ import time
 
 try:
     from openfhe import *
-    import openfhe_numpy as onp
     OPENFHE_AVAILABLE = True
 except ImportError:
     OPENFHE_AVAILABLE = False
     print("Warning: OpenFHE not available")
 
 from softmax_openfhe import SoftmaxCKKSOpenFHE
+from matmul_openfhe import MatMulOpenFHE
 
 
 class AttentionBlockOpenFHE:
@@ -71,9 +71,20 @@ class AttentionBlockOpenFHE:
         # Scaling factor for attention: 1 / sqrt(d_k)
         self.scale = 1.0 / np.sqrt(d_k)
 
-        # Initialize CKKS context
-        print(f"Initializing CKKS context (mult_depth={mult_depth})...")
-        self.cc, self.keys = self._initialize_ckks()
+        # Initialize matrix multiplication module
+        print(f"Initializing matrix multiplication module...")
+        self.matmul = MatMulOpenFHE(
+            mult_depth=mult_depth,
+            scale_mod_size=scale_mod_size,
+            verbose=False
+        )
+
+        # Use the same CKKS context for consistency
+        self.cc = self.matmul.cc
+        self.keys = self.matmul.keys
+
+        print(f"  Ring dimension: {self.cc.GetRingDimension()}")
+        print(f"  Slots available: {self.cc.GetRingDimension() // 2}")
 
         # Initialize softmax for each row (d_k dimensions)
         print(f"Initializing softmax for attention scores...")
@@ -86,35 +97,9 @@ class AttentionBlockOpenFHE:
 
         print("✅ Attention block initialized successfully")
 
-    def _initialize_ckks(self):
-        """Initialize CKKS crypto context and keys."""
-        params = CCParamsCKKSRNS()
-        params.SetMultiplicativeDepth(self.mult_depth)
-        params.SetScalingModSize(self.scale_mod_size)
-        params.SetFirstModSize(60)
-        params.SetScalingTechnique(FIXEDAUTO)
-        params.SetSecretKeyDist(UNIFORM_TERNARY)
-
-        # Don't set batch size - let OpenFHE determine it automatically
-        # This ensures we have enough slots for matrix operations
-
-        cc = GenCryptoContext(params)
-        cc.Enable(PKESchemeFeature.PKE)
-        cc.Enable(PKESchemeFeature.LEVELEDSHE)
-        cc.Enable(PKESchemeFeature.ADVANCEDSHE)
-
-        keys = cc.KeyGen()
-        cc.EvalMultKeyGen(keys.secretKey)
-        cc.EvalSumKeyGen(keys.secretKey)
-
-        print(f"  Ring dimension: {cc.GetRingDimension()}")
-        print(f"  Slots available: {cc.GetRingDimension() // 2}")
-
-        return cc, keys
-
     def encrypt_matrix(self, matrix, mode="tile"):
         """
-        Encrypt a matrix using openfhe-numpy.
+        Encrypt a matrix using the matrix multiplication module.
 
         Args:
             matrix: NumPy array to encrypt
@@ -123,46 +108,21 @@ class AttentionBlockOpenFHE:
         Returns:
             Encrypted matrix (openfhe_numpy array)
         """
-        batch_size = self.cc.GetRingDimension() // 2
-
-        ctm = onp.array(
-            cc=self.cc,
-            data=matrix,
-            batch_size=batch_size,
-            order=onp.ROW_MAJOR,
-            fhe_type="C",
-            mode=mode,
-            public_key=self.keys.publicKey,
-        )
-
-        return ctm
+        return self.matmul.encrypt_matrix(matrix, mode=mode)
 
     def attention_scores_encrypted(self, Q_ct, K_ct):
         """
-        Compute attention scores: Q @ K^T / sqrt(d_k)
+        Compute attention scores: Q @ K^T
 
         Args:
             Q_ct: Encrypted query matrix
             K_ct: Encrypted key matrix
 
         Returns:
-            openfhe_numpy array of attention scores (before softmax)
+            openfhe_numpy array of attention scores (before softmax and scaling)
         """
-        # Generate keys for transpose
-        onp.gen_transpose_keys(self.keys.secretKey, K_ct)
-
-        # Compute K^T
-        KT_ct = onp.transpose(K_ct)
-
-        # Generate keys for matrix multiplication
-        onp.EvalSquareMatMultRotateKeyGen(self.keys.secretKey, Q_ct.ncols)
-
-        # Compute Q @ K^T
-        scores_ct = Q_ct @ KT_ct
-
-        # Scale by 1/sqrt(d_k)
-        # We'll scale after decryption for simplicity
-        # (In production, implement homomorphic scaling)
+        # Use matmul module for Q @ K^T computation
+        scores_ct = self.matmul.matmul_with_transpose(Q_ct, K_ct)
 
         return scores_ct
 
@@ -176,9 +136,9 @@ class AttentionBlockOpenFHE:
         Returns:
             NumPy array with softmax applied to each row
         """
-        # Decrypt to get scores
+        # Decrypt to get scores using matmul module
         # (In a real production system, you'd implement fully homomorphic softmax)
-        scores = scores_ct.decrypt(self.keys.secretKey, unpack_type="original")
+        scores = self.matmul.decrypt_matrix(scores_ct, unpack_type="original")
 
         nrows, ncols = scores.shape
 
@@ -254,13 +214,11 @@ class AttentionBlockOpenFHE:
         print("\n[5/5] Computing final output (attention_weights @ V)...")
         start = time.time()
 
-        # Generate rotation keys for second matmul
-        onp.EvalSquareMatMultRotateKeyGen(self.keys.secretKey, attention_weights_ct.ncols)
+        # Use matmul module for final multiplication
+        output_ct = self.matmul.matmul(attention_weights_ct, V_ct)
 
-        output_ct = attention_weights_ct @ V_ct
-
-        # Decrypt result
-        output = output_ct.decrypt(self.keys.secretKey, unpack_type="original")
+        # Decrypt result using matmul module
+        output = self.matmul.decrypt_matrix(output_ct, unpack_type="original")
         print(f"  Final computation time: {time.time() - start:.2f}s")
         print(f"  Output shape: {output.shape}")
 
