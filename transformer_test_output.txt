@@ -1,0 +1,86 @@
+================================================================================
+  Transformer Block - Basic Test
+================================================================================
+
+Test configuration:
+  Sequence length: 4
+  Model dimension: 4
+  FFN dimension: 16
+Initializing Transformer Block (d_model=4, d_ff=16)...
+  [1/3] Initializing self-attention...
+Initializing matrix multiplication module...
+  Ring dimension: 131072
+  Slots available: 65536
+Initializing softmax for attention scores...
+✅ Attention block initialized successfully
+  [2/3] Initializing feed-forward network...
+  [3/3] Initializing layer normalization...
+✅ Transformer block initialized successfully
+
+Total initialization time: 25.05s
+
+Input:
+  Shape: (4, 4)
+  Range: [-0.96, 0.79]
+  First row: [ 0.24835708 -0.06913215  0.32384427]
+
+Computing reference (NumPy)...
+
+Computing encrypted transformer...
+
+================================================================================
+  Transformer Block Forward Pass
+================================================================================
+
+[1/4] Self-attention with residual connection...
+
+================================================================================
+  Computing Attention Block
+================================================================================
+
+[1/5] Encrypting Q, K, V matrices...
+  Encryption time: 1.69s
+
+[2/5] Computing attention scores (Q @ K^T)...
+  Attention scores time: 45.56s
+
+[3/5] Applying softmax to attention scores (with scaling)...
+  Softmax time: 165.12s
+  Attention weights shape: (4, 4)
+
+[4/5] Encrypting attention weights...
+  Encryption time: 0.52s
+
+[5/5] Computing final output (attention_weights @ V)...
+  Final computation time: 38.09s
+  Output shape: (4, 4)
+  Self-attention time: 251.00s
+
+[2/4] Layer normalization (post-attention)...
+  Layer norm time: 0.00s
+
+[3/4] Feed-forward network with residual connection...
+  Feed-forward time: 22.67s
+
+[4/4] Layer normalization (post-FFN)...
+  Layer norm time: 0.00s
+
+================================================================================
+  Results
+================================================================================
+
+Total computation time: 273.67s
+
+Output comparison:
+  Reference (first row): [-0.24839295 -1.35538014  0.16346659]
+  Encrypted (first row): [-0.27935294 -1.34248199  0.17669106]
+
+  Max output error: 0.0353
+
+Attention weights comparison:
+  Reference (first row): [0.32899051 0.29408676 0.19165529 0.18526744]
+  Encrypted (first row): [0.32899051 0.29408676 0.19165529 0.18526744]
+
+  Max weights error: 0.0000
+
+✅ TEST PASSED - Transformer computation acceptable

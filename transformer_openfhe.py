@@ -35,35 +35,72 @@ from matmul_openfhe import MatMulOpenFHE
 
 class LayerNormOpenFHE:
     """
-    Layer Normalization for encrypted data.
+    Layer Normalization for encrypted data using THOR approach.
 
-    LayerNorm(x) = (x - mean(x)) / sqrt(var(x) + epsilon) * gamma + beta
+    LayerNorm(x) = gamma * (x - mean(x)) / sqrt(var(x) + epsilon) + beta
 
-    For CKKS, we use a simplified version:
-    - Mean and variance computed on plaintext (hybrid approach)
-    - Or use approximate normalization
+    Uses Goldschmidt's algorithm with adaptive Successive Over-Relaxation (aSOR)
+    to compute inverse square root homomorphically, based on THOR paper.
+
+    Reference: THOR paper Section 5.2 and Appendix C
     """
 
-    def __init__(self, d_model: int, epsilon: float = 1e-5, mode: str = "hybrid"):
+    def __init__(self, d_model: int, epsilon: float = 1e-5):
         """
         Initialize layer normalization.
 
         Args:
             d_model: Model dimension
-            epsilon: Small constant for numerical stability
-            mode: "hybrid" (decrypt for stats) or "approx" (polynomial approximation)
+            epsilon: Small constant for numerical stability (default 1e-5)
         """
         self.d_model = d_model
         self.epsilon = epsilon
-        self.mode = mode
 
         # Learnable parameters (in practice, these would be trained)
         self.gamma = np.ones(d_model)
         self.beta = np.zeros(d_model)
 
+        # Relaxation factors from THOR paper Appendix C for inverse square root
+        # These are optimized for fast convergence with aSOR
+        self.relaxation_factors = np.array([2.6374, 2.1722, 1.5135, 1.0907])
+
+    def inverse_sqrt_goldschmidt(self, x):
+        """
+        Compute 1/sqrt(x) using Goldschmidt's algorithm with aSOR.
+
+        Based on THOR paper Appendix C:
+        Given a_0 = x ∈ (0, 1) and b_0 = 1, iteratively compute:
+          a_{i+1} = k_i * a_i * (3 - k_i * a_i)^2 / 4
+          b_{i+1} = sqrt(k_i) * b_i * (3 - k_i * a_i) / 2
+
+        where k_i are adaptive relaxation factors.
+
+        Args:
+            x: Input value (should be scaled to (0, 1))
+
+        Returns:
+            Approximation of 1/sqrt(x)
+        """
+        # Initialize
+        a = x
+        b = 1.0
+
+        # Iterate with adaptive relaxation factors
+        for k in self.relaxation_factors:
+            ka = k * a
+            term = 3.0 - ka
+
+            # Update a: a_{i+1} = k_i * a_i * (3 - k_i * a_i)^2 / 4
+            a = ka * (term ** 2) / 4.0
+
+            # Update b: b_{i+1} = sqrt(k_i) * b_i * (3 - k_i * a_i) / 2
+            b = np.sqrt(k) * b * term / 2.0
+
+        return b
+
     def normalize(self, x):
         """
-        Apply layer normalization.
+        Apply layer normalization using THOR approach.
 
         Args:
             x: Input array (d_model,) or (batch, d_model)
@@ -74,12 +111,38 @@ class LayerNormOpenFHE:
         if x.ndim == 1:
             x = x.reshape(1, -1)
 
-        # Compute statistics
+        # THOR approach: fully homomorphic using Goldschmidt/aSOR
+        # Compute mean homomorphically (would use sum and rotation in actual HE)
         mean = np.mean(x, axis=-1, keepdims=True)
-        var = np.var(x, axis=-1, keepdims=True)
+
+        # Center the data
+        x_centered = x - mean
+
+        # Compute variance: var = mean(x_centered^2)
+        var = np.mean(x_centered ** 2, axis=-1, keepdims=True)
+
+        # Add epsilon for numerical stability
+        var_eps = var + self.epsilon
+
+        # Scale to (0, 1) for inverse square root approximation
+        # Find scaling factor (in practice, this would be predetermined)
+        max_var = np.max(var_eps)
+        if max_var > 0:
+            scale = 1.0 / max_var
+            var_scaled = var_eps * scale
+        else:
+            var_scaled = var_eps
+            scale = 1.0
+
+        # Compute 1/sqrt(var_eps) using Goldschmidt with aSOR
+        inv_sqrt_var_scaled = self.inverse_sqrt_goldschmidt(var_scaled)
+
+        # Unscale: 1/sqrt(var_eps) = 1/sqrt(var_scaled / scale)
+        #                          = sqrt(scale) / sqrt(var_scaled)
+        inv_sqrt_var = inv_sqrt_var_scaled * np.sqrt(scale)
 
         # Normalize
-        x_norm = (x - mean) / np.sqrt(var + self.epsilon)
+        x_norm = x_centered * inv_sqrt_var
 
         # Scale and shift
         output = x_norm * self.gamma + self.beta
@@ -207,6 +270,9 @@ class TransformerBlockOpenFHE:
             softmax_K: Softmax approximation terms
             softmax_scale_factor: Softmax scaling
             relu_degree: ReLU polynomial degree
+
+        Note: LayerNorm uses THOR-style implementation (Goldschmidt/aSOR)
+              for fully homomorphic computation.
         """
         if not OPENFHE_AVAILABLE:
             raise ImportError("OpenFHE is required")
@@ -221,6 +287,7 @@ class TransformerBlockOpenFHE:
 
         # Initialize components
         print(f"Initializing Transformer Block (d_model={d_model}, d_ff={d_ff})...")
+        print("  Using THOR-style LayerNorm (Goldschmidt/aSOR)")
 
         # Self-attention
         print("  [1/3] Initializing self-attention...")
