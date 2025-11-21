@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Test runner for OpenFHE CKKS Transformer Block
-# This script runs the comprehensive test suite for transformer_openfhe.py
+# Test runner for Fully Encrypted Transformer
+# This script runs the comprehensive test suite for fully encrypted transformer components
 
 echo "================================================================================"
-echo "  OpenFHE CKKS Transformer Block - Test Runner"
+echo "  Fully Encrypted Transformer - Test Runner"
 echo "================================================================================"
 echo ""
 
@@ -48,11 +48,13 @@ echo ""
 # Check if required files exist
 required_files=(
     "transformer_openfhe.py"
-    "attention_openfhe.py"
+    "attention_fully_encrypted.py"
     "relu_openfhe.py"
     "matmul_openfhe.py"
     "softmax_openfhe.py"
-    "test_transformer.py"
+    "test_full_transformer_encrypted.py"
+    "test_softmax_fully_encrypted.py"
+    "test_layernorm_encrypted.py"
 )
 
 for file in "${required_files[@]}"; do
@@ -67,63 +69,112 @@ echo ""
 
 # Run the tests
 echo "================================================================================"
-echo "  Running Transformer Block Tests"
+echo "  Running Fully Encrypted Transformer Tests"
 echo "================================================================================"
 echo ""
-echo "⚠️  WARNING: This will take 15-30 minutes due to:"
-echo "  - Self-attention computation (~4 min)"
-echo "  - Feed-forward network with ReLU (~5 min per layer)"
-echo "  - Layer normalization"
-echo "  - Multiple test cases"
+echo "⚠️  WARNING: This will take 10-12 minutes due to:"
+echo "  - Complete transformer pipeline test (~6 min)"
+echo "  - Softmax fully encrypted test (~3 min)"
+echo "  - LayerNorm encrypted test (~3 min)"
 echo ""
 echo "Components tested:"
-echo "  1. Layer Normalization"
-echo "  2. Feed-Forward Network"
-echo "  3. Basic Transformer Block"
-echo "  4. Transformer Properties"
+echo "  1. Softmax (fully encrypted - ciphertext input)"
+echo "  2. Attention (fully encrypted - no decryption)"
+echo "  3. LayerNorm (Goldschmidt algorithm)"
+echo "  4. Complete Pipeline (Input → Attention → LayerNorm → Output)"
 echo ""
 
-# Run tests with timeout (30 minutes)
-timeout 1800 python3 test_transformer.py
+# Initialize counters
+total_tests=0
+passed_tests=0
 
-# Check exit code
-exit_code=$?
-
-echo ""
+# Test 1: Complete Pipeline
 echo "================================================================================"
-
+echo "Test 1/3: Complete Transformer Pipeline"
+echo "================================================================================"
+timeout 600 python3 test_full_transformer_encrypted.py
+exit_code=$?
+total_tests=$((total_tests + 1))
 if [ $exit_code -eq 0 ]; then
-    echo "  ✅ All tests completed successfully!"
-    echo "================================================================================"
+    passed_tests=$((passed_tests + 1))
+    echo "✅ Test 1 passed"
+else
+    echo "❌ Test 1 failed (exit code: $exit_code)"
+fi
+echo ""
+
+# Test 2: Softmax Fully Encrypted
+echo "================================================================================"
+echo "Test 2/3: Softmax Fully Encrypted"
+echo "================================================================================"
+timeout 300 python3 test_softmax_fully_encrypted.py
+exit_code=$?
+total_tests=$((total_tests + 1))
+if [ $exit_code -eq 0 ]; then
+    passed_tests=$((passed_tests + 1))
+    echo "✅ Test 2 passed"
+else
+    echo "❌ Test 2 failed (exit code: $exit_code)"
+fi
+echo ""
+
+# Test 3: LayerNorm Encrypted
+echo "================================================================================"
+echo "Test 3/3: LayerNorm Encrypted"
+echo "================================================================================"
+timeout 300 python3 test_layernorm_encrypted.py
+exit_code=$?
+total_tests=$((total_tests + 1))
+if [ $exit_code -eq 0 ]; then
+    passed_tests=$((passed_tests + 1))
+    echo "✅ Test 3 passed"
+else
+    echo "❌ Test 3 failed (exit code: $exit_code)"
+fi
+echo ""
+
+# Print summary
+echo "================================================================================"
+echo "  TEST SUMMARY"
+echo "================================================================================"
+echo ""
+echo "Tests passed: $passed_tests/$total_tests"
+echo ""
+
+if [ $passed_tests -eq $total_tests ]; then
+    echo "✅ ALL TESTS PASSED!"
     echo ""
-    echo "The transformer block implementation is working correctly."
+    echo "The fully encrypted transformer implementation is working correctly."
+    echo ""
+    echo "Key Features:"
+    echo "  ✓ Softmax accepts ciphertext input directly (0 decryptions)"
+    echo "  ✓ Attention fully encrypted (0 decryptions)"
+    echo "  ✓ LayerNorm with Goldschmidt (0 decryptions)"
+    echo "  ✓ Complete pipeline: Only 1 decryption (final output)"
     echo ""
     echo "Usage example:"
-    echo "  from transformer_openfhe import TransformerBlockOpenFHE"
-    echo "  transformer = TransformerBlockOpenFHE(d_model=8, d_ff=32)"
-    echo "  output, weights = transformer.forward(x)"
+    echo "  from attention_fully_encrypted import AttentionFullyEncrypted"
+    echo "  from transformer_openfhe import LayerNormOpenFHE"
+    echo ""
+    echo "  # Complete pipeline"
+    echo "  attention = AttentionFullyEncrypted(d_k=8, mult_depth=60)"
+    echo "  output = attention.attention_single_encrypted(q, k, v, return_ciphertext=True)"
     echo ""
     echo "Architecture:"
-    echo "  Input → Self-Attention → (+) → LayerNorm → FFN → (+) → LayerNorm → Output"
-    echo "           ↓_______________|                  ↓_______|"
-    echo "         (residual)                      (residual)"
-    exit 0
-elif [ $exit_code -eq 124 ]; then
-    echo "  ⏱️  Tests timed out (>30 minutes)"
-    echo "================================================================================"
+    echo "  Input → [Encrypt] → Attention → Residual → LayerNorm → [Decrypt] → Output"
+    echo "          └─────────────── ALL ON CIPHERTEXT ──────────────┘"
     echo ""
-    echo "The tests took too long. This might be normal for larger configurations."
-    echo "Try reducing parameters (smaller d_model, d_ff, or softmax_K)."
-    exit 1
+    exit 0
 else
-    echo "  ❌ Tests failed (exit code: $exit_code)"
-    echo "================================================================================"
+    echo "❌ SOME TESTS FAILED"
     echo ""
     echo "Please check the error messages above for details."
     echo ""
     echo "Common issues:"
-    echo "  - Approximation errors: Expected due to ReLU/Softmax approximations"
-    echo "  - Memory issues: Try smaller dimensions"
-    echo "  - Timeout: Reduce softmax_K or sequence length"
+    echo "  - Approximation errors: Check tolerance settings"
+    echo "  - Memory issues: Try smaller dimensions (d_model=4)"
+    echo "  - Timeout: Normal for first run (key generation)"
+    echo "  - Depth errors: Increase mult_depth parameter"
+    echo ""
     exit 1
 fi

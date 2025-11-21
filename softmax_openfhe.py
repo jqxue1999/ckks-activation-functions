@@ -222,15 +222,97 @@ class SoftmaxCKKSOpenFHE:
 
         return S_ct
 
-    def softmax_encrypted(self, z):
+    def reciprocal_newton(self, a_ct, iterations=4, scale=None):
         """
-        Compute softmax on encrypted data.
+        Compute 1/a on encrypted data using Newton iteration with scaling.
+
+        Newton iteration for reciprocal:
+            x_{n+1} = x_n * (2 - a * x_n)
+
+        Converges to 1/a when starting from x_0 = 1, but only if a is close to 1.
+        For other values, we scale first.
+
+        Args:
+            a_ct: Encrypted value (ciphertext) - should be positive
+            iterations: Number of Newton iterations (default 4)
+            scale: Scaling factor (if None, uses self.n for softmax sums)
+
+        Returns:
+            Ciphertext containing 1/a
+        """
+        if scale is None:
+            scale = float(self.n)  # Softmax sum is typically close to n
+
+        # Scale input: a_scaled = a / scale
+        # This brings the value closer to 1 for better convergence
+        scale_pt = self.cc.MakeCKKSPackedPlaintext([1.0 / scale] * self.n)
+        a_scaled_ct = self.cc.EvalMult(a_ct, scale_pt)
+
+        # Initial guess: x_0 = 1 (works well for a_scaled near 1)
+        one_pt = self.cc.MakeCKKSPackedPlaintext([1.0] * self.n)
+        x = self.cc.Encrypt(self.keys.publicKey, one_pt)
+
+        # Prepare constant 2.0 for iteration
+        two_pt = self.cc.MakeCKKSPackedPlaintext([2.0] * self.n)
+
+        # Newton iteration: x_{n+1} = x_n * (2 - a_scaled * x_n)
+        # This computes 1/a_scaled
+        for _ in range(iterations):
+            # Compute a_scaled * x_n
+            ax = self.cc.EvalMult(a_scaled_ct, x)
+
+            # Compute 2 - a_scaled * x_n
+            two_minus_ax = self.cc.EvalSub(two_pt, ax)
+
+            # Compute x_{n+1} = x_n * (2 - a_scaled * x_n)
+            x = self.cc.EvalMult(x, two_minus_ax)
+
+        # x now contains 1/a_scaled = 1/(a/scale) = scale/a
+        # To get 1/a, divide by scale: (scale/a) / scale = 1/a
+        inv_scale_pt = self.cc.MakeCKKSPackedPlaintext([1.0 / scale] * self.n)
+        result = self.cc.EvalMult(x, inv_scale_pt)
+
+        return result
+
+    def softmax_encrypted_from_ciphertext(self, z_ct, return_ciphertext=False):
+        """
+        Compute softmax on ciphertext input (no max-shift).
+
+        Args:
+            z_ct: Encrypted input vector (ciphertext)
+            return_ciphertext: If True, return ciphertext; else plaintext
+
+        Returns:
+            Softmax result
+        """
+        # Step 1: Compute exponentials (fully encrypted)
+        E_ct = self.compute_exponential_encrypted(z_ct)
+
+        # Step 2: Sum all exponentials (fully encrypted)
+        S_ct = self.sum_with_rotation_encrypted(E_ct)
+
+        # Step 3: Compute 1/S using Newton iteration (fully encrypted!)
+        inv_S_ct = self.reciprocal_newton(S_ct, iterations=4)
+
+        # Step 4: Multiply E * (1/S) to get softmax
+        result_ct = self.cc.EvalMult(E_ct, inv_S_ct)
+
+        if return_ciphertext:
+            return result_ct
+        else:
+            # Decrypt final result
+            return self.decrypt_vector(result_ct)
+
+    def softmax_encrypted(self, z, return_ciphertext=False):
+        """
+        Compute softmax on encrypted data using fully homomorphic operations.
 
         Args:
             z: Plaintext input vector (will be encrypted)
+            return_ciphertext: If True, return ciphertext; if False, decrypt and return plaintext
 
         Returns:
-            Decrypted softmax result
+            Softmax result - ciphertext if return_ciphertext=True, else plaintext
         """
         # Shift by maximum for stability
         z_max = np.max(z)
@@ -239,28 +321,23 @@ class SoftmaxCKKSOpenFHE:
         # Encrypt the shifted input
         z_ct = self.encrypt_vector(z_shifted)
 
-        # Step 1: Compute exponentials
+        # Step 1: Compute exponentials (fully encrypted)
         E_ct = self.compute_exponential_encrypted(z_ct)
 
-        # Step 2: Sum all exponentials
+        # Step 2: Sum all exponentials (fully encrypted)
         S_ct = self.sum_with_rotation_encrypted(E_ct)
 
-        # Step 3: Divide (using multiplicative inverse approximation)
-        # For CKKS division, we can use EvalDivide or Newton iteration
-        # Here we'll use a simple approach: multiply by 1/S
-        # In practice, you'd use cc.EvalDivide or implement Newton iteration
+        # Step 3: Compute 1/S using Newton iteration (fully encrypted!)
+        inv_S_ct = self.reciprocal_newton(S_ct, iterations=4)
 
-        # Decrypt S to get the sum (in real application, this would be done
-        # using homomorphic division)
-        S_values = self.decrypt_vector(S_ct)
-        s = S_values[0]  # All elements are the same
+        # Step 4: Multiply E * (1/S) to get softmax
+        result_ct = self.cc.EvalMult(E_ct, inv_S_ct)
 
-        # Create plaintext 1/s and multiply (broadcast to all slots)
-        inv_s_pt = self.cc.MakeCKKSPackedPlaintext([1.0 / s] * self.n)
-        result_ct = self.cc.EvalMult(E_ct, inv_s_pt)
-
-        # Decrypt final result
-        return self.decrypt_vector(result_ct)
+        if return_ciphertext:
+            return result_ct
+        else:
+            # Decrypt final result
+            return self.decrypt_vector(result_ct)
 
 
 def test_openfhe_softmax():
